@@ -1,0 +1,1295 @@
+---
+title: "Forecasting CPD Crashes: A Comprehensive Time Series Analysis"
+author: "Bala Manish Reddy Thumma"
+format:
+  html:
+    fig-align: center # Center figure alignment
+    embed-resources: true # Force document to be self-contained (critical!)
+    code-fold: true # Turn on code fold
+    toc: true # Create table of contents
+execute: 
+  warning: false # Turn off warnings
+---
+
+# Section 1: Exploratory Data Analysis and Time Series Decomposition
+
+------------------------------------------------------------------------
+
+The objective of this section is to analyze the selected time-series dataset to understand its key characteristics, identify trends and patterns, assess seasonality, and prepare the data for modeling. This foundational analysis ensures that appropriate forecasting techniques can be applied effectively.
+
+### 1.1 Introduction
+
+The dataset used for this analysis comes from the **Cincinnati Police Department (CPD) Traffic Crash Reports**, which is publicly available on the **City of Cincinnati Open Data Portal**. The data captures **daily traffic crashes** recorded within the city over a period of **one year (366 days)**. Each observation represents the total number of crashes reported on a given day.
+
+The data-generating process for traffic crashes is influenced by multiple factors, including road conditions, weather, traffic density, and seasonality. For instance, during winter months, icy and snowy conditions may lead to an increase in accident rates, whereas during the summer, traffic congestion due to tourism and events may cause fluctuations. Additionally, certain days of the week, such as weekends or holidays, could exhibit higher or lower crash counts depending on road activity and enforcement measures. By analyzing this dataset, we aim to understand the underlying trends, seasonality, and anomalies in traffic crash occurrences, ultimately leading to better forecasting and potential improvements in traffic management and safety policies.
+
+### 1.2 Summary Statistics
+
+The objective of this subsection is to compute and analyze key summary statistics of the time-series dataset to understand its overall distribution, central tendency, variability, and potential anomalies. This statistical overview helps in assessing the data’s characteristics before proceeding with visual analysis and modeling.
+
+##### Libraries Used
+
+```{r}
+# Load necessary libraries
+library(tidyverse)       # For data manipulation and visualization  
+library(knitr)           # For creating elegant tables and dynamic reports 
+library(plotly)          # For creating interactive and dynamic visualizations
+library(kableExtra)     # For enhancing and styling tables in knitr  
+library(zoo)             # For rolling/moving averages  
+library(ggplot2)         # For plotting graphs  
+library(tseries)         # For time series analysis and statistical tests  
+library(tsibble)         # For handling and analyzing time series data  
+library(dplyr)           # For data manipulation using a grammar of data operations  
+library(fable)           # For forecasting models in a tidy framework  
+library(fable.prophet)   # For Prophet forecasting models within the fable framework  
+library(fabletools)      # For tools supporting fable models and workflows  
+library(forecast)        # For classical time series forecasting models  
+library(feasts)          # For feature extraction and visualization of time series data  
+library(lubridate)       # For working with date-time data easily  
+library(yardstick)       # For measuring and comparing model performance metrics  
+library(patchwork)       # For combining multiple ggplot2 plots into a single visualization  
+```
+
+##### Summary Statistics
+
+```{r}
+
+# Load dataset
+file_path <- "cpd_crashes.csv"
+df <- read_csv(file_path)
+
+# Convert 'date' column to Date format
+df$date <- as.Date(df$date, format="%Y-%m-%d")
+
+# Summary statistics of the time series variable
+summary_stats <- df %>%
+  summarise(
+    count = n(),
+    mean = mean(cpd_crashes, na.rm = TRUE),
+    sd = sd(cpd_crashes, na.rm = TRUE),
+    min = min(cpd_crashes, na.rm = TRUE),
+    q1 = quantile(cpd_crashes, 0.25, na.rm = TRUE),
+    median = median(cpd_crashes, na.rm = TRUE),
+    q3 = quantile(cpd_crashes, 0.75, na.rm = TRUE),
+    max = max(cpd_crashes, na.rm = TRUE)
+  )
+
+
+# Print summary statistics as a well-formatted table
+kable(summary_stats, caption = "Summary Statistics")
+
+```
+
+The summary statistics provide key insights into the distribution and characteristics of the time-series dataset:
+
+-   **Count (366 observations):** The dataset contains 366 data points, suggesting it covers a full year of daily observations (including a leap year).
+
+-   **Mean (85.02):** The average value of the time-series data is approximately 85, indicating the central tendency.
+
+-   **Standard Deviation (21.92):** A relatively high standard deviation suggests noticeable fluctuations in the data over time.
+
+-   **Minimum (29) and Maximum (178):** The data ranges from a minimum of 29 to a maximum of 178, highlighting a considerable spread.
+
+-   **Quartiles (Q1: 69, Median: 85, Q3: 97):**
+
+    -   **Q1 (69):** 25% of the data points fall below 69.
+
+    -   **Median (85):** The middle value suggests a balanced distribution around the mean.
+
+    -   **Q3 (97):** 75% of the data falls below 97, indicating that most values cluster around the central range.
+
+### 1.3 Data Visualization
+
+The objective of this subsection is to present graphical representations of the time-series dataset to identify underlying patterns, trends, and potential anomalies. These visualizations help in understanding the overall structure of the data and serve as a foundation for further analysis, including trend and seasonality assessment.
+
+##### Time-Series Plot
+
+```{r}
+
+# Time-Series Plot
+ggplot(df, aes(x = date, y = cpd_crashes)) +
+  geom_line(color = "blue") +
+  labs(title = "Daily Traffic Crashes in Cincinnati",
+       x = "Date", y = "Number of Crashes") +
+  theme_minimal()
+```
+
+The time-series plot of daily traffic crashes in Cincinnati shows **high variability**, with **frequent fluctuations** throughout the year. While no strong long-term trend is immediately evident, there are **short-term spikes and dips**, suggesting potential **seasonal or periodic patterns**. The latter half of the year exhibits **more frequent extreme values**, which may be influenced by external factors such as weather conditions, holidays, or changes in traffic patterns. Further decomposition will confirm the presence of **trend and seasonality**.
+
+##### Histogram of Daily Traffic Crashes
+
+```{r}
+
+# Histogram of Crash Counts
+ggplot(df, aes(x = cpd_crashes)) +
+  geom_histogram(bins = 30, fill = "skyblue", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Daily Traffic Crashes",
+       x = "Number of Crashes", y = "Frequency") +
+  theme_minimal()
+```
+
+The histogram of daily traffic crashes in Cincinnati reveals a **right-skewed distribution**, indicating that most days experience a moderate number of crashes, with fewer days seeing exceptionally high crash counts. The **peak frequency** occurs around **85 crashes per day**, aligning with the mean observed in summary statistics. The presence of a **longer tail on the right** suggests occasional extreme crash days, potentially influenced by external factors such as weather, holidays, or special events. Further statistical analysis will help assess the impact of these variations.
+
+##### Box Plot for Outlier Detection
+
+```{r}
+# Box Plot for Outlier Detection
+ggplot(df, aes(y = cpd_crashes)) +
+  geom_boxplot(fill = "lightcoral", color = "black") +
+  labs(title = "Box Plot of Daily Traffic Crashes",
+       y = "Number of Crashes") +
+  theme_minimal()
+```
+
+The box plot confirms a **right-skewed distribution**, with the **median number of crashes** centered around 85. The **interquartile range (IQR)** suggests that most daily crash counts fall within a moderate range, but the presence of **multiple outliers above the upper whisker** indicates occasional extreme crash days. These outliers may correspond to specific events, such as adverse weather conditions or high-traffic days. The lower whisker is relatively shorter, reinforcing the presence of a skewed distribution. Further analysis will assess whether these outliers impact overall forecasting accuracy.
+
+##### Moving Averages (7-day and 30-day Smoothing)
+
+```{r}
+
+# Compute Moving Averages
+df <- df %>%
+  arrange(date) %>%
+  mutate(`7-day MA` = rollmean(cpd_crashes, 7, fill = NA, align = "right"),
+         `30-day MA` = rollmean(cpd_crashes, 30, fill = NA, align = "right"))
+
+# Create interactive Plotly graph
+p <- plot_ly(df, x = ~date) %>%
+  add_lines(y = ~cpd_crashes, name = "Daily Crashes", line = list(color = 'lightgray')) %>%
+  add_lines(y = ~`7-day MA`, name = "7-day MA", line = list(color = 'blue')) %>%
+  add_lines(y = ~`30-day MA`, name = "30-day MA", line = list(color = 'red')) %>%
+  layout(title = "Moving Averages of Traffic Crashes",
+         xaxis = list(title = "Date"),
+         yaxis = list(title = "Number of Crashes"),
+         legend = list(x = 0.1, y = 0.9),
+         hovermode = "x unified")
+
+# Display the interactive plot
+p
+
+```
+
+The **7-day moving average (blue line)** smooths out short-term fluctuations, highlighting **weekly variations** in crash counts. Meanwhile, the **30-day moving average (red line)** captures **longer-term trends**, showing a **gradual increase in crashes** over the first half of the year, followed by stabilization and minor fluctuations in the later months.
+
+The **short-term moving average** exhibits noticeable peaks and troughs, suggesting potential **seasonal or cyclical patterns**. The **long-term moving average remains relatively stable**, indicating no strong overall trend but periodic shifts in crash intensity. Further decomposition will help isolate trend and seasonal components more precisely.
+
+### 1.4 Seasonality Assessment
+
+The objective of this subsection is to evaluate the presence and extent of **seasonality** in the time-series data. By decomposing the time series into **trend, seasonal, and residual components**, this analysis aims to determine whether recurring patterns exist and how they influence fluctuations in daily traffic crashes. Identifying seasonal effects is essential for selecting appropriate forecasting models in later sections.
+
+##### Time Series Decomposition
+
+```{r}
+# Convert data to a time series object with weekly seasonality
+ts_data <- ts(df$cpd_crashes, frequency = 7) # Assuming weekly seasonality
+
+# Perform STL decomposition
+decomp <- stl(ts_data, s.window = "periodic")
+
+# Plot the decomposition
+autoplot(decomp) +
+  ggtitle("Time Series Decomposition of Traffic Crashes") +
+  theme_minimal()
+```
+
+The decomposition of daily traffic crashes into **trend, seasonal, and remainder components** provides key insights:
+
+-   **Trend Component:** The underlying trend fluctuates over time, with periods of **rising and falling crash counts**. This suggests that traffic incidents are influenced by external factors rather than following a consistent upward or downward trajectory.
+
+-   **Seasonal Component:** A **strong repeating pattern** is evident, indicating the presence of **seasonality** in the data. The consistent cyclical movements suggest that traffic crashes exhibit periodic behavior, potentially influenced by weekly or monthly variations.
+
+-   **Remainder (Residual) Component:** The residuals show **irregular fluctuations**, capturing variations not explained by the trend or seasonal components. The presence of occasional spikes suggests **unpredictable events** contributing to higher crash counts on certain days.
+
+This decomposition confirms that **seasonality is a significant factor** in traffic crashes, which will be crucial in selecting an appropriate forecasting model.
+
+##### Day-of-Week Seasonality
+
+```{r}
+
+df$day_of_week <- weekdays(df$date)
+
+# Day-of-week seasonality plot
+ggplot(df, aes(x = reorder(day_of_week, cpd_crashes, FUN = mean), y = cpd_crashes)) +
+  stat_summary(fun = mean, geom = "bar", fill = "darkorange") +
+  labs(title = "Average Daily Traffic Crashes by Day of Week",
+       x = "Day of the Week", y = "Average Number of Crashes") +
+  theme_minimal()
+```
+
+The bar chart indicates a **clear weekly pattern** in traffic crashes. Crash counts are **lowest on weekends (Saturday and Sunday)** and **increase steadily from Monday onward**, peaking on **Fridays**. This pattern suggests that **weekday traffic volume** plays a significant role in accident frequency, likely due to commuting patterns. The **gradual rise from Monday to Friday** aligns with typical workweek congestion trends, reinforcing the presence of a **weekly seasonality** component in the data.
+
+##### Quantifying Seasonality Strength
+
+```{r}
+# Compute seasonality strength
+sst <- var(decomp$time.series[, "seasonal"]) / 
+       (var(decomp$time.series[, "seasonal"]) + var(decomp$time.series[, "remainder"]))
+
+# Print seasonality strength percentage
+print(paste("Seasonality Strength:", round(sst * 100, 2), "%"))
+
+```
+
+The computed **seasonality strength of 18.63%** indicates that while seasonal patterns are present, they are **moderate rather than dominant** in explaining variations in daily traffic crashes. This suggests that **other factors, such as trend and irregular fluctuations, contribute significantly to crash occurrences**.
+
+This level of seasonality implies that while **weekly or periodic patterns exist**, external influences such as weather, road conditions, or special events may introduce substantial variability. Further modeling will assess the extent to which seasonality contributes to forecast accuracy.
+
+### 1.5 Train-Test Split
+
+The objective of this subsection is to divide the dataset into **training and test sets** to facilitate model development and evaluation. The training set will be used to fit forecasting models, while the test set will assess their predictive performance. This split ensures that the models are tested on **unseen data**, providing a realistic measure of their accuracy and generalizability.
+
+```{r}
+
+# Define the train-test split (80-20 split)
+train_size <- floor(0.8 * nrow(df))  # 80% for training
+train <- df[1:train_size, ]
+test <- df[(train_size + 1):nrow(df), ]
+
+# Identify the split dates
+train_start <- min(train$date)
+train_end <- max(train$date)
+test_start <- min(test$date)
+test_end <- max(test$date)
+
+# Print the split dates
+print(paste("Training Data: ", train_start, " to ", train_end))
+print(paste("Testing Data: ", test_start, " to ", test_end))
+
+# Plot Train-Test Split
+ggplot() +
+  geom_line(data = train, aes(x = date, y = cpd_crashes), color = "blue") +
+  geom_line(data = test, aes(x = date, y = cpd_crashes), color = "red", linetype = "dashed") +
+  labs(title = "Train-Test Split for Time Series Analysis",
+       x = "Date", y = "Number of Crashes",
+       subtitle = paste("Training: ", train_start, "to", train_end, "| Testing: ", test_start, "to", test_end)) +
+  theme_minimal()
+
+```
+
+The dataset has been divided into a **training period (January 1, 2024 – October 18, 2024)** and a **test period (October 19, 2024 – December 31, 2024)**. The training set, shown in **blue**, comprises the majority of the data and will be used for model development. The test set, shown in **red**, consists of the final 75 days and will be used to evaluate the forecasting models.
+
+This split ensures that models are validated on **unseen data**, allowing for an objective assessment of predictive performance. Given the observed fluctuations in crash counts, model selection will need to account for both trend and seasonal components to improve accuracy.
+
+# Section 2 - ARIMA Modeling
+
+------------------------------------------------------------------------
+
+The objective of this section is to develop an **ARIMA (AutoRegressive Integrated Moving Average) model** to forecast daily traffic crashes. This involves assessing **stationarity**, applying necessary **transformations**, identifying **optimal ARIMA parameters**, and evaluating model **residuals**. The final model will be selected based on statistical criteria to ensure reliable forecasting performance.
+
+### 2.1 Assessing Stationarity
+
+The objective of this subsection is to evaluate whether the time series is **stationary** by analyzing its **mean and variance stability over time**. Stationarity is a critical assumption for ARIMA modeling, as non-stationary data can lead to unreliable forecasts. This assessment will involve **visual analysis**, **variance checks**, and **statistical tests (such as KPSS)** to determine whether transformations like differencing are required
+
+```{r}
+
+# Perform KPSS Test for stationarity
+kpss_test <- kpss.test(train$cpd_crashes, null = "Level")
+print(kpss_test)
+
+```
+
+The **KPSS test results (KPSS Level = 0.88211, p-value = 0.01)** indicate that the **null hypothesis of stationarity is rejected** at a 1% significance level. This confirms that the **time series is non-stationary**, meaning that the mean and/or variance change over time.
+
+Since stationarity is a key requirement for ARIMA modeling, appropriate **transformations such as differencing** will be applied to induce stationarity before proceeding with model selection.
+
+### 2.2 First Order and Seasonal Differencing
+
+The objective of this subsection is to apply **first-order differencing and seasonal differencing** to the time series data to ensure stationarity. Stationarity is a key requirement for SARIMA modeling, as non-stationary data can lead to unreliable forecasts. By applying differencing, we aim to remove trend components and address seasonality in the dataset.
+
+```{r}
+# Apply first differencing and store it separately
+train_diff <- train[-1, ]  # Remove the first row to align with differenced data
+train_diff$diff_crashes <- diff(train$cpd_crashes, differences = 1)
+
+# Re-run KPSS test on differenced data
+kpss_diff_test <- kpss.test(na.omit(train_diff$diff_crashes), null = "Level")
+print(kpss_diff_test)
+
+# Apply seasonal differencing (7-day lag)
+train_seasonal_diff <- train_diff[-(1:7), ]  # Remove first 7 rows to align
+train_seasonal_diff$seasonal_diff_crashes <- diff(train_diff$diff_crashes, lag = 7)
+
+# KPSS test on seasonally differenced data
+kpss_seasonal_test <- kpss.test(na.omit(train_seasonal_diff$seasonal_diff_crashes), null = "Level")
+```
+
+After applying **first-order differencing** and **seasonally differencing,** the **KPSS test results (KPSS Level = 0.013823, p-value = 0.1)** indicate that the **null hypothesis of stationarity cannot be rejected**. This confirms that the transformed series is now **stationary** and **seasonal differencing** effectively removes additional seasonality components, making it suitable for SARIMA modeling.
+
+Since differencing has effectively removed the trend component, further steps will involve **ACF/PACF analysis** to determine appropriate ARIMA parameters.
+
+### 2.3 ACF/PACF Analysis for ARIMA Parameter Selection
+
+The objective of this subsection is to analyze the **Autocorrelation Function (ACF)** and **Partial Autocorrelation Function (PACF)** plots to identify appropriate values for the **AutoRegressive (p), Differencing (d), and Moving Average (q) components** of the ARIMA model. These plots help determine the **lag dependencies** present in the data and guide model selection.
+
+```{r}
+
+# Plot ACF and PACF
+par(mfrow = c(1,2))  # Arrange plots side by side
+Acf(train_diff$diff_crashes, main = "ACF of Differenced Data")  # Check q value
+Pacf(train_diff$diff_crashes, main = "PACF of Differenced Data")  # Check p value
+
+```
+
+The **ACF** of the differenced series shows a few **significant spikes** at lower lags, while the **PACF** suggests a notable influence at **lag 1** (and potentially at lag 2). These patterns indicate that an **ARIMA model with one or two autoregressive terms (p = 1 or 2)** may be appropriate. The absence of pronounced moving average components in the ACF suggests a **low q value**, potentially **q = 0 or 1**.
+
+This analysis provides a starting point for further model selection (e.g., **ARIMA(1,1,0), ARIMA(2,1,0), or ARIMA(1,1,1)**). Final decisions will be guided by **information criteria (AIC/BIC)** and residual diagnostics.
+
+### 2.4 Seasonal ACF/PACF Analysis
+
+The objective of this subsection is to evaluate **seasonal autocorrelation and partial autocorrelation patterns** in the time series, particularly after applying **seasonal differencing**. By examining **seasonal ACF** and **seasonal PACF** plots, this analysis aims to identify the appropriate **seasonal ARIMA (SARIMA)** terms (i.e., **P, D, Q**) and the seasonal period that should be incorporated into the forecasting model.
+
+```{r}
+# Plot seasonal ACF and PACF for weekly lags
+par(mfrow = c(1,2))
+Acf(train_diff$diff_crashes, lag.max = 28, main = "Seasonal ACF (Lag 7, 14, 21, 28)")
+Pacf(train_diff$diff_crashes, lag.max = 28, main = "Seasonal PACF (Lag 7, 14, 21, 28)")
+
+```
+
+Following **seasonal differencing**, the **seasonal ACF** and **seasonal PACF** reveal notable autocorrelations at **multiples of 7 lags** (i.e., 7, 14, 21, 28). These findings confirm a **weekly seasonality** and suggest the need for **seasonal AR or MA terms** in the model. Specifically, the **significant spike** at lag 7 in the PACF implies a possible **seasonal AR component** of order 1.
+
+**Proposed Base Model:**
+
+Following seasonal differencing, the seasonal ACF and seasonal PACF reveal notable autocorrelations at multiples of 7 lags (i.e., 7, 14, 21, 28). These findings confirm a weekly seasonality and suggest the need for seasonal AR or MA terms in the model. Specifically, the significant spike at lag 7 in the PACF implies a possible seasonal AR component of order 1.
+
+Based on these observations, an appropriate **base model** for further evaluation is:
+
+SARIMA(1,1,0)(1,1,0)7​,
+
+where:
+
+-   The non-seasonal part ARIMA(1,1,0) addresses the AR(1) structure identified in the differenced series. (1,1,0)7​ incorporates seasonal differencing and an AR(1) term with a seven-day period to capture weekly seasonality.
+
+Subsequent **AIC/BIC comparisons** and **residual diagnostics** will determine whether this specification adequately captures both the non-seasonal and weekly seasonal dynamics.
+
+### 2.5 Auto-ARIMA Model Fitting & Model Selection
+
+The objective of this subsection is to **systematically identify and compare** potential ARIMA (or SARIMA) model specifications. First, an **auto-ARIMA** process will be used to generate an initial candidate model. Subsequently, multiple models are fitted manually and evaluated based on **information criteria (AIC/BIC)**. This approach ensures the **optimal balance** between model complexity and forecasting accuracy.
+
+##### Auto-ARIMA
+
+```{r}
+
+# Fit Auto ARIMA on the training dataset
+auto_sarima <- auto.arima(train$cpd_crashes, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+
+# Print the selected model details
+summary(auto_sarima)
+
+```
+
+The **Auto ARIMA procedure** selected an **ARIMA(0,1,2)** model with a final **AIC of 2588.49** and **BIC of 2599.51**, suggesting a moderate fit. On the training set, the model exhibits a **MAPE of approximately 20.59%**, indicating moderate forecasting accuracy.
+
+### 2.6 Model Selection via AIC/BIC
+
+The objective of this subsection is to identify the **best-fitting ARIMA model** by comparing candidate specifications using **information criteria such as AIC (Akaike Information Criterion)** and **BIC (Bayesian Information Criterion)**. By fitting multiple ARIMA models and selecting the one with the **lowest AIC/BIC**, this process ensures a balance between **goodness-of-fit** and **model complexity**, ultimately guiding the choice of an optimal forecasting model.
+
+```{r}
+
+# Fit multiple SARIMA models
+model1 <- Arima(train$cpd_crashes, order = c(1,1,0), seasonal = c(1,1,0,7))  # SARIMA(1,1,0)(1,1,0)[7]
+model2 <- Arima(train$cpd_crashes, order = c(2,1,1), seasonal = c(1,0,1,7))  # SARIMA(2,1,1)(1,0,1)[7]
+model3 <- Arima(train$cpd_crashes, order = c(1,1,2), seasonal = c(1,0,1,7))  # SARIMA(1,1,2)(1,0,1)[7]
+model4 <- Arima(train$cpd_crashes, order = c(1,1,1), seasonal = c(1,1,1,7))  # SARIMA(1,1,1)(1,1,1)[7]
+
+# Fit an auto ARIMA model
+auto_arima_model <- auto.arima(train$cpd_crashes, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+
+# Compare AIC/BIC values
+models <- data.frame(
+  Model = c("SARIMA(1,1,0)(1,1,0)[7]", "SARIMA(2,1,1)(1,0,1)[7]", 
+            "SARIMA(1,1,2)(1,0,1)[7]", "SARIMA(1,1,1)(1,1,1)[7]", "Auto ARIMA"),
+  AIC = c(AIC(model1), AIC(model2), AIC(model3), AIC(model4), AIC(auto_arima_model)),
+  BIC = c(BIC(model1), BIC(model2), BIC(model3), BIC(model4), BIC(auto_arima_model))
+)
+
+# Print the table using knitr
+kable(models, caption = "SARIMA Model Comparison (AIC & BIC)") %>%
+  kable_styling(full_width = FALSE, position = "center")
+
+```
+
+Based on the comparison of AIC and BIC values for several SARIMA specifications (including an **auto-ARIMA** model), two leading models emerged with **nearly identical** information criteria:
+
+-   **Auto ARIMA**: AIC = 2588.489, BIC = 2599.508
+
+-   **SARIMA(1,1,1)(1,1,1)\[7\]**: AIC = 2588.578, BIC = 2599.598
+
+Although the Auto ARIMA model exhibits marginally lower AIC/BIC values, the difference is negligible. Considering the explicit incorporation of weekly seasonality and the nearly equivalent information criteria, **SARIMA(1,1,1)(1,1,1)\[7\]** is selected as the final model for further analysis.
+
+Therefore, **SARIMA(1,1,1)(1,1,1)\[7\]** is selected as the **final model** for residual diagnostics and further forecasting, given its **strong performance** and alignment with observed weekly seasonality in the data.
+
+### 2.7 Residual Diagnostics
+
+The objective of this subsection is to **assess the adequacy of the final SARIMA model** by examining its **residuals**. This entails verifying that the residuals exhibit **no remaining autocorrelation**, are **stationary**, and approximate **white noise**. Statistical tests (e.g., **Ljung-Box**) and visual checks (such as **ACF plots** of residuals) will be utilized to confirm the model’s suitability for forecasting.
+
+##### Residuals
+
+```{r}
+best_model <- model4 
+
+# Plot residuals of the best model
+checkresiduals(best_model)
+
+```
+
+The residuals of the **ARIMA(1,1,1)** model appear to be **white noise** with no discernible pattern, as indicated by the **residual plot** and the **ACF** remaining within significance bounds. The **Ljung-Box test** (Q\* = 8.515, df = 8, p-value = 0.3848) fails to reject the null hypothesis of no autocorrelation, suggesting that the model adequately captures the time-series dynamics. Additionally, the **histogram** of residuals is approximately **normal** and **centered around zero**, further supporting the suitability of the model for forecasting.
+
+##### Box-Ljung test
+
+```{r}
+# Perform Ljung-Box test
+ljung_box_test <- Box.test(residuals(best_model), lag = 10, type = "Ljung-Box")
+
+# Print test results
+print(ljung_box_test)
+
+```
+
+The Box-Ljung test (X-squared = 8.515, df = 10, p-value = 0.5787) fails to reject the **null hypothesis of no autocorrelation** in the residuals, indicating that the **best_model** ( **SARIMA(1,1,1)(1,1,1)\[7\]** )adequately captures the time-series structure. The absence of significant autocorrelation, coupled with residuals that appear **normally distributed** and **centered around zero**, suggests that the model is suitable for forecasting.
+
+# Section 3 - Meta Prophet Model
+
+------------------------------------------------------------------------
+
+The objective of this section is to develop and refine a **Prophet** model for the time-series data. **Prophet**, created by Facebook’s Core Data Science team, offers an automated approach to handle **trend, seasonality, and event-driven patterns**. By **iteratively adjusting** changepoint settings, seasonality parameters, and other hyperparameters (e.g., holiday effects or saturation limits), this section aims to identify a **best-fit Prophet model**. Finally, this model’s performance will be **compared against both SARIMA and sNaive approaches** introduced earlier, ensuring a thorough evaluation of forecasting effectiveness.
+
+### 3.1 Building the Initial Prophet Model
+
+The objective of this subsection is to **prepare and structure the data** for Prophet, ensuring it follows the **ds–y format**, and to **fit an initial Prophet model** with default parameters. This baseline model provides a reference point for further tuning and helps to identify overarching trends, seasonality, or external factors that need refinement in subsequent steps.
+
+```{r}
+# Convert the training dataset into a tsibble
+train_ts <- train %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  as_tsibble(index = date)
+
+# Fit a default Prophet model
+prophet_fit <- train_ts %>%
+  model(prophet = prophet(cpd_crashes))
+
+# Forecast for the length of the test set
+prophet_fc <- prophet_fit %>%
+  forecast(h = nrow(test))
+
+# Plot Prophet forecast alongside historical data
+autoplot(prophet_fc) +
+  autolayer(train_ts, cpd_crashes, color = "black") +
+  labs(title = "Facebook Prophet Forecast",
+       x = "Date",
+       y = "CPD Crashes") +
+  theme_minimal()
+
+```
+
+The initial **Prophet model** projects future daily crashes (in blue), along with **80% and 95% confidence intervals**. While this baseline forecast captures the overall level of crash counts, it shows **relatively wide intervals**, reflecting substantial uncertainty. The trend component in this initial model suggests **slight increases** in future crashes, although further refinement is likely needed to capture the **strong weekly seasonality** and any other recurring patterns. Subsequent **hyperparameter tuning**—including adjustments to changepoints and seasonality—will help improve forecast accuracy and narrow the uncertainty bands.
+
+##### Prophet Model Decomposition
+
+```{r}
+# Extract decomposition components
+components_fc <- prophet_fit %>%
+  components()
+
+# Plot decomposition
+autoplot(components_fc) +
+  labs(title = "Prophet Model Decomposition",
+       x = "Date",
+       y = "Effect") +
+  theme_minimal()
+
+```
+
+The decomposition indicates a **gradual upward trend**, suggesting that daily crashes may increase slowly over time. A clear **weekly seasonality** is also evident, as shown by the cyclical pattern in the lower plot, though the amplitude appears somewhat muted. Additionally, the **residual component** indicates that the model does not fully explain short-term fluctuations or anomalies in crash counts.
+
+These insights suggest that **refining the model**—for example, by increasing the flexibility of changepoints, adjusting the seasonal order, or incorporating additional regressors (e.g., holidays or weather variables)—could improve the forecast accuracy. The next step involves **hyperparameter tuning** to capture the pronounced cyclical behavior and reduce unexplained variance in the residuals.
+
+### 3.2 Changepoint Analysis & Trend Refinement
+
+The objective of this subsection is to **enhance the accuracy** of the initial Prophet forecast by **fine-tuning hyperparameters** related to changepoints, seasonality, and other model settings. This process aims to capture more nuanced patterns in the data, including **weekend effects, potential holiday impacts, or additional factors**, ultimately improving the model’s predictive performance.
+
+```{r}
+# Extract changepoints detected by Prophet
+changepoints_df <- prophet_fit %>%
+  glance() %>%
+  pull(changepoints) %>%
+  bind_rows() %>%
+  rename(date = changepoints) %>%
+  mutate(date = as.Date(date)) %>%
+  select(date)
+
+# Plot trend component with changepoints
+components_fc %>%
+  ggplot(aes(x = date, y = trend)) +
+  geom_line(color = "blue") +  # Trend line
+  geom_vline(data = changepoints_df, aes(xintercept = as.numeric(date)), 
+             linetype = "dashed", color = "red") +  # Changepoints for trend only
+  labs(title = "Trend Component with Prophet-Detected Changepoints",
+       x = "Date",
+       y = "CPD Crashes (Trend)") +
+  theme_minimal()  
+```
+
+The chart illustrates Prophet’s **trend component** (blue line) along with multiple **potential changepoints** (red dashed lines) that Prophet identifies by default. In this case, the model does not appear to recognize any sharp or substantial shifts in trend, instead showing a relatively **steady upward slope** in daily crashes. This outcome suggests that:
+
+1.  **Gradual Changes** – The underlying pattern of traffic crashes may be evolving in a slower, more continuous manner rather than undergoing abrupt shifts.
+
+2.  **Changepoint Sensitivity** – Adjusting Prophet’s **changepoint prior scale** or increasing the number of potential changepoints may be necessary if domain knowledge indicates more significant trend fluctuations.
+
+Refining these changepoint parameters, alongside other hyperparameters (e.g., seasonality modes, holidays), can improve the model’s ability to **capture sudden changes** and produce a more accurate forecast.
+
+##### Trend with different ChangePoints
+
+```{r}
+
+# Model 1: 10 Changepoints (Your current model)
+prophet_fit_10 <- train_ts %>%
+  model(prophet = fable.prophet::prophet(cpd_crashes ~ 
+    growth("linear", 
+      n_changepoints = 10,  
+      changepoint_range = 0.8,  
+      changepoint_prior_scale = 0.2)))  
+
+# Model 2: 15 Changepoints (Balanced approach)
+prophet_fit_15 <- train_ts %>%
+  model(prophet = fable.prophet::prophet(cpd_crashes ~ 
+    growth("linear", 
+      n_changepoints = 15,  
+      changepoint_range = 0.8,  
+      changepoint_prior_scale = 0.2)))  
+
+# Model 3: 20 Changepoints (More flexibility)
+prophet_fit_20 <- train_ts %>%
+  model(prophet = fable.prophet::prophet(cpd_crashes ~ 
+    growth("linear", 
+      n_changepoints = 20,  
+      changepoint_range = 0.8,  
+      changepoint_prior_scale = 0.3)))  
+
+
+# Function to extract trend and plot with changepoints
+plot_trend_with_changepoints <- function(model, title) {
+  components_fc <- model %>%
+    components()
+
+  changepoints_df <- model %>%
+    glance() %>%
+    pull(changepoints) %>%
+    bind_rows() %>%
+    rename(date = changepoints) %>%
+    mutate(date = as.Date(date)) %>%
+    select(date)
+
+  components_fc %>%
+    ggplot(aes(x = date, y = trend)) +
+    geom_line(color = "blue") +  
+    geom_vline(data = changepoints_df, aes(xintercept = as.numeric(date)), 
+               linetype = "dashed", color = "red") +  
+    labs(title = title,
+         x = "Date",
+         y = "CPD Crashes (Trend)") +
+    theme_minimal()
+}
+
+# Generate plots for each model
+plot1 <- plot_trend_with_changepoints(prophet_fit_10, "Trend with 10 Changepoints (Less Flexible)")
+plot2 <- plot_trend_with_changepoints(prophet_fit_15, "Trend with 15 Changepoints (Balanced)")
+plot3 <- plot_trend_with_changepoints(prophet_fit_20, "Trend with 20 Changepoints (More Flexible)")
+
+
+# Display plots one below the other
+(plot1 / plot2 / plot3)  # Stacked layout 
+
+```
+
+Increasing the number of changepoints makes the trend component **more flexible**, allowing the model to capture subtle shifts in crash patterns. With **10 changepoints**, the trend remains largely linear, suggesting minimal structural change. By contrast, **20 changepoints** allow for more pronounced inflection points, albeit at the risk of overfitting. A balanced approach, such as **15 changepoints**, may provide a **reasonable trade-off** between capturing genuine fluctuations and avoiding excessive model complexity.
+
+### 3.3 Evaluating Seasonality, Growth Trend, and Holiday Impacts in Prophet
+
+The objective of this subsection is to **refine the final Prophet model** by systematically evaluating multiple aspects of seasonality, trend, and special events. Specifically, it involves:
+
+-   **Comparing Additive vs. Multiplicative Seasonality** to determine which approach more accurately reflects seasonal fluctuations in crash counts.
+
+-   **Assessing Linear vs. Logistic Growth** for potential saturation effects in long-term forecasts.
+
+-   **Examining the Influence of Holidays** to see whether incorporating holiday effects reduces forecast errors and captures short-term spikes or dips in traffic crashes.
+
+By **combining** these considerations, the subsection aims to identify the **most suitable Prophet configuration**, ensuring a more robust and context-aware forecast of daily crash counts.
+
+##### Weekly Seasonality
+
+```{r}
+# Refit Prophet Model with Explicit Weekly Seasonality
+prophet_seasonality <- train_ts %>%
+  model(prophet = fable.prophet::prophet(cpd_crashes ~ 
+    growth("linear", 
+      n_changepoints = 15,  
+      changepoint_range = 0.8,  
+      changepoint_prior_scale = 0.2) + 
+    season("week", 7)))  # Explicitly include weekly seasonality
+
+# Extract components from the fitted Prophet model
+seasonality_components <- prophet_seasonality %>%
+  components()
+
+# Aggregate seasonality by day of the week
+weekly_seasonality <- seasonality_components %>%
+  mutate(week_day = weekdays(date)) %>%  # Extract day of the week
+  group_by(week_day) %>%
+  summarise(avg_effect = mean(week, na.rm = TRUE))  # Average effect for each weekday
+
+# Plot seasonality by weekday
+ggplot(weekly_seasonality, aes(x = reorder(week_day, avg_effect), y = avg_effect)) +
+  geom_bar(stat = "identity", fill = "blue", alpha = 0.7) +
+  labs(title = "Average Weekly Seasonality in Traffic Crashes",
+       x = "Day of the Week",
+       y = "Effect on CPD Crashes") +
+  theme_minimal()
+
+```
+
+The chart highlights **strong weekly seasonality** in crash counts, with **lower values** on weekends (particularly **Sundays**) and **higher values** towards the end of the workweek (notably **Fridays**). This pattern aligns with **commuting trends** and indicates that incorporating weekly seasonality in a **multiplicative or additive** manner can substantially improve the model’s forecasting accuracy. Adjusting these seasonality parameters ensures the model captures the **amplitude** of fluctuations correctly and provides a more realistic depiction of daily crash variations.
+
+##### Holidays or Events Impact
+
+```{r}
+# Load necessary libraries
+library(tibble)
+library(tsibble)
+library(lubridate)
+library(dplyr)
+library(fable.prophet)
+library(ggplot2)
+
+# 1. Define major U.S. holidays in 2024
+holidays_2024 <- tibble(
+  holiday = c("New Year's Day", 
+              "Martin Luther King Jr. Day", 
+              "Presidents' Day",
+              "Memorial Day", 
+              "Independence Day", 
+              "Labor Day", 
+              "Columbus Day", 
+              "Veterans Day", 
+              "Thanksgiving", 
+              "Christmas Day"),
+  date = ymd(c("2024-01-01", 
+               "2024-01-15", 
+               "2024-02-19",
+               "2024-05-27", 
+               "2024-07-04", 
+               "2024-09-02",
+               "2024-10-14", 
+               "2024-11-11", 
+               "2024-11-28", 
+               "2024-12-25"))
+)
+
+# Convert to a tsibble
+holidays_2024 <- holidays_2024 %>%
+  as_tsibble(index = date)
+
+# 2. Fit Prophet models (with and without holiday effects)
+#    Assumes 'data_ts' is already a tsibble containing 'cpd_crashes'
+model_holiday_comparison <- train_ts %>%
+  model(
+    # Baseline Prophet model
+    prophet_orig = fable.prophet::prophet(cpd_crashes),
+    
+    # Prophet model with holiday effects
+    prophet_w_holidays = fable.prophet::prophet(
+      cpd_crashes ~ growth() +
+        season(period = "year") +
+        season(period = "week") +
+        holiday(holidays_2024)  # Incorporate holiday tsibble
+    )
+  )
+
+# 3. Decompose and plot components for both models
+model_holiday_comparison %>%
+  components() %>%
+  autoplot() +
+  labs(
+    title = "Prophet Model Decomposition: With and Without Holidays",
+    x = "Date",
+    y = "CPD Crashes"
+  ) +
+  theme_minimal()
+
+```
+
+The decomposition illustrates two key differences between the **baseline Prophet model** and the **holiday-adjusted model**:
+
+1.  **Trend Component** – The holiday-adjusted model (teal) shows a slightly different trend slope, indicating that holiday effects might cause deviations from the baseline.
+
+2.  **Seasonal & Residual Effects** – While both models capture weekly seasonality similarly, the model with holidays accounts for additional fluctuations around major calendar events, resulting in somewhat lower residual variance.
+
+The side-by-side forecasts suggest that **including major U.S. holidays** introduces small but meaningful shifts in predicted daily crash counts. In particular, certain holidays exhibit minor deviations from the baseline, hinting that **holiday periods can influence short-term crash patterns**. Overall, these variations point to a potentially **more accurate reflection** of day-to-day fluctuations when holiday effects are taken into account.
+
+##### Linear vs. Logistic
+
+```{r}
+
+# Define capacity and floor for logistic model
+max_cap <- max(train_ts$cpd_crashes) * 1.2  # 20% above max observed value
+min_floor <- min(train_ts$cpd_crashes) * 0.8  # 20% below min observed value
+
+# Add capacity constraints to dataset
+train_ts <- train_ts %>%
+    mutate(cap = max_cap, floor = min_floor)
+
+# Fit Prophet models for linear and logistic trends
+model_trend <- train_ts %>%
+    model(
+        prophet_linear = fable.prophet::prophet(cpd_crashes ~ 
+            growth("linear") + season("year")),
+        prophet_logistic = fable.prophet::prophet(cpd_crashes ~ 
+            growth("logistic", capacity = max_cap, floor = min_floor) + season("year"))
+    )
+
+# Extract trend components
+components_trend <- model_trend %>%
+    components()
+
+# Plot trends for linear and logistic models
+ggplot(components_trend, aes(x = date, y = trend, color = .model)) +
+    geom_line(size = 1) +
+    labs(title = "Comparison of Linear vs. Logistic Trend in CPD Crashes",
+         x = "Date",
+         y = "CPD Crashes (Trend)",
+         color = "Model") +
+    theme_minimal()
+
+```
+
+The **linear trend** (red line) projects a continual rise in daily crashes, potentially overestimating longer-term growth. By contrast, the **logistic trend** (teal line) introduces a **saturating effect**, suggesting that crash counts may level off at higher levels. If a realistic upper bound exists—for instance, due to traffic patterns or infrastructure capacity—the **logistic trend** may offer a more plausible long-term projection.
+
+##### Additive vs. Multiplicative Seasonality
+
+```{r}
+
+# 1. Convert test data to a tsibble
+test_tsibble <- as_tsibble(test, index = date)
+
+# 2. Fit Prophet Model with Additive Seasonality
+prophet_additive <- train_ts %>%
+  model(prophet = fable.prophet::prophet(
+    cpd_crashes ~ growth("linear", 
+                         n_changepoints = 15,
+                         changepoint_range = 0.8,
+                         changepoint_prior_scale = 0.2) +
+                  season("week", 7, type = "additive")  # Additive seasonality
+  ))
+
+# 3. Fit Prophet Model with Multiplicative Seasonality
+prophet_multiplicative <- train_ts %>%
+  model(prophet = fable.prophet::prophet(
+    cpd_crashes ~ growth("linear",
+                         n_changepoints = 15,
+                         changepoint_range = 0.8,
+                         changepoint_prior_scale = 0.2) +
+                  season("week", 7, type = "multiplicative")  # Multiplicative seasonality
+  ))
+
+# 4. Forecast for Test Data
+forecast_additive <- prophet_additive %>%
+  forecast(new_data = test_tsibble) %>%
+  as_tibble() %>%
+  mutate(Model = "Additive")
+
+forecast_multiplicative <- prophet_multiplicative %>%
+  forecast(new_data = test_tsibble) %>%
+  as_tibble() %>%
+  mutate(Model = "Multiplicative")
+
+# 5. Combine forecasts for visualization
+forecast_comparison <- bind_rows(forecast_additive, forecast_multiplicative)
+
+# 6. Plot Additive vs. Multiplicative Seasonality Forecasts
+ggplot(forecast_comparison, aes(x = date, y = .mean, color = Model)) +
+  geom_line(size = 1.2) +
+  scale_color_manual(values = c("Additive" = "blue", "Multiplicative" = "red")) +
+  labs(
+    title = "Comparison of Additive vs. Multiplicative Seasonality",
+    subtitle = "Blue: Additive | Red: Multiplicative",
+    x = "Date",
+    y = "CPD Crashes"
+  ) +
+  theme_minimal()
+
+```
+
+After comparing the two models, the **multiplicative seasonality** approach appears better aligned with the observed fluctuations in daily crash counts. Its **scaled amplitude** more accurately reflects increases at higher crash levels, suggesting that crash patterns become more pronounced as overall volumes rise. Consequently, adopting **multiplicative seasonality** is likely to yield a more **realistic and robust** forecast for this dataset.
+
+### 3.4 Prophet Forecasting & Model Evaluation
+
+The objective of this subsection is to **consolidate the best-performing Prophet settings** identified in the previous steps—covering seasonality choice (additive/multiplicative), growth constraints (linear/logistic), and holiday adjustments—into one **final, tuned Prophet model**. This final configuration will generate **forecasts** that account for both long-term trends and short-term fluctuations, culminating in a **comprehensive evaluation** of the model’s predictive ability compared to alternative approaches.
+
+##### Prophet Model
+
+```{r}
+# Convert test data into a tsibble
+test_ts <- test %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  as_tsibble(index = date)
+
+# Generate forecasts for the test period
+prophet_forecast <- prophet_fit_15 %>%
+  forecast(h = nrow(test_ts))  # Ensure test set length is used
+
+# Plot Prophet forecast alongside actual test data
+autoplot(prophet_forecast) +
+  autolayer(test_ts, cpd_crashes, color = "red") +  # Now using tsibble format
+  labs(title = "Prophet Model Forecast vs. Actual CPD Crashes",
+       x = "Date",
+       y = "CPD Crashes") +
+  theme_minimal()
+```
+
+-   **Prediction Intervals and Confidence Levels**
+
+    -   The **blue shaded regions (80% and 95% confidence intervals)** represent the forecast uncertainty.
+
+    -   Compared to previous models, the **intervals appear more stable**, suggesting a smoother prediction with less variance.
+
+-   **Alignment with Actual Data**
+
+    -   The **red line (actual crash counts)** exhibits **sharp peaks and dips**, while the forecast trend remains more **gradual and smoothed**.
+
+    -   The **actual values often fall outside the predicted range**, indicating that the model **may be underestimating short-term fluctuations** in crash occurrences.
+
+-   **Trend and Seasonality Capture**
+
+    -   The model captures **long-term trends well**, maintaining a steady trajectory.
+
+    -   However, **seasonality effects appear less pronounced**, potentially affecting short-term forecasting accuracy.
+
+-   **Potential Model Limitations**
+
+    -   The **prediction bands are relatively narrow**, which might indicate that the model is **overconfident in its forecast** and does not fully accommodate variability in the data.
+
+    -   The **underestimation of extreme values (peaks and troughs)** suggests that the model might **benefit from additional tuning**, such as increasing the flexibility of seasonality components or modifying changepoint settings.
+
+##### Final Prophet Model
+
+```{r}
+
+# Fit the Final Prophet Model on the Training Data
+prophet_fit_final <- train_ts %>%
+  model(
+    prophet = fable.prophet::prophet(
+      cpd_crashes ~
+        # Linear Growth
+        growth("linear",
+               n_changepoints = 15,
+               changepoint_range = 0.8,
+               changepoint_prior_scale = 0.2) +
+        # Multiplicative Weekly Seasonality
+        season("week", 7, type = "multiplicative") +
+        # Include Major U.S. Holidays for 2024 (if 'holidays_2024' is defined)
+        holiday(holidays_2024)
+    )
+  )
+
+# 3. Convert Test Data into a tsibble (if needed)
+test_ts <- test %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  as_tsibble(index = date)
+
+# 4. Generate Forecasts for the Test Period
+#    This uses 'new_data = test_ts' rather than a specific horizon.
+prophet_forecast <- prophet_fit_final %>%
+  forecast(new_data = test_ts)
+
+# 5. Plot Prophet Forecast alongside Actual Test Data
+autoplot(prophet_forecast) +
+  autolayer(test_ts, cpd_crashes, color = "red") +
+  labs(
+    title = "Final Prophet Model Forecast vs. Actual CPD Crashes",
+    x = "Date",
+    y = "CPD Crashes"
+  ) +
+  theme_minimal()
+
+```
+
+-   **Prediction Intervals and Uncertainty**
+
+    -   The **blue shaded regions (80% and 95% confidence intervals)** indicate the range within which future crash counts are expected to fall.
+
+    -   The **uncertainty bands widen over time**, reflecting increased variability in longer-term predictions.
+
+-   **Alignment with Actual Data**
+
+    -   The **red line (actual crash counts)** closely follows the predicted trend but exhibits **higher volatility** than the forecast.
+
+    -   While the **overall seasonality and trend are well captured**, some extreme peaks and troughs deviate from the predicted values.
+
+-   **Seasonality and Trend Capture**
+
+    -   The model effectively identifies **weekly seasonality**, with fluctuations aligning with expected traffic patterns.
+
+    -   A **gradual upward trend** is observed, indicating a potential increase in traffic crashes over time.
+
+After evaluating multiple Prophet model configurations, **the Prophet model with multiplicative seasonality, linear growth, and holiday effects is selected as the final model.** This model provides a better representation of seasonal variations, as the impact of seasonality scales with the overall trend, making it more adaptable to fluctuations in crash patterns.
+
+Compared to the previous prophet model, the multiplicative approach captures **stronger variations** in crash counts while maintaining a **balanced prediction interval**. Additionally, incorporating holiday effects enhances the model’s ability to reflect real-world influences. The final model demonstrates **better alignment with actual data, improved seasonality capture, and more realistic forecasting**
+
+# Section 4 - Model Comparison and Validation
+
+------------------------------------------------------------------------
+
+The objective of this section is to **systematically evaluate the predictive accuracy and reliability** of the selected forecasting models. This includes implementing **rolling window cross-validation** to assess performance consistency over multiple time periods, followed by a **comparative analysis of model errors** to determine the most effective forecasting approach. The insights derived from this validation process will inform data-driven decision-making and ensure the robustness of the final forecasting model.
+
+### 4.1 Rolling Window Cross-Validation
+
+The objective of this subsection is to implement **rolling window cross-validation** to assess the stability and generalizability of the forecasting models over different time periods. By systematically training and testing the models across multiple time windows, this approach ensures that the selected model can effectively adapt to temporal variations while minimizing overfitting. The results will provide a **comprehensive evaluation of model performance** and support the selection of the most reliable forecasting strategy.
+
+```{r}
+# Define rolling window cross-validation parameters
+cv_splits <- train_ts %>%
+  stretch_tsibble(.init = floor(0.8 * nrow(train_ts)), .step = 7) # 80% training, 7-day step
+
+# Visualize cross-validation iterations
+cv_splits %>%
+  ggplot() +
+  geom_point(aes(x = date, y = factor(.id), color = factor(.id))) +
+  ylab("Iteration") +
+  xlab("Date") +
+  ggtitle("Rolling Window Cross-Validation for CPD Crashes") +
+  theme_minimal()
+```
+
+The **rolling window cross-validation** visualization demonstrates the sequential training and testing process across multiple iterations. Each iteration represents a different time period where the model is trained on past data and validated on unseen future observations. The following insights can be drawn from the plot:
+
+1.  **Consistent Evaluation Across Time Windows** – The structured approach ensures that each segment of the time series is used for both training and validation, preventing bias from any specific period.
+
+2.  **Temporal Adaptability** – By shifting the validation set forward in time, this approach evaluates the model’s ability to generalize across different time horizons.
+
+3.  **Robust Model Performance Assessment** – The spread of the validation windows enables a more reliable evaluation of predictive accuracy and stability over time.
+
+This method enhances the credibility of the final model selection by providing **a dynamic assessment of forecasting performance** rather than relying on a single test-train split.
+
+### 4.2 Model Training & Forecasting
+
+The objective of this subsection is to assess the forecasting accuracy of the selected model using a rolling window cross-validation approach. By evaluating key performance metrics such as **Mean Absolute Error (MAE), Root Mean Squared Error (RMSE), and Mean Absolute Percentage Error (MAPE)** across multiple validation windows, this analysis aims to determine the model’s consistency, reliability, and predictive robustness over different time periods. This step is crucial for ensuring that the chosen model can generalize effectively across future unseen data and remains suitable for deployment in practical decision-making scenarios.
+
+##### Models within Cross-Validation
+
+```{r}
+
+# Ensure `cv_splits` is not empty
+if (nrow(cv_splits) > 0) {
+
+  # Fit models within cross-validation
+  cv_forecasts <- cv_splits %>%
+    model(
+      SNaive = SNAIVE(cpd_crashes),
+      SARIMA = ARIMA(cpd_crashes ~ pdq(1,1,1) + PDQ(1,1,1,7)),  # Include a constant explicitly
+      Prophet = fable.prophet::prophet(cpd_crashes ~ 
+        growth("linear", 
+               n_changepoints = 15, 
+               changepoint_prior_scale = 0.5) + 
+        season(period = "week", type = "multiplicative") +  # Weekly seasonality
+        holiday(holidays_2024)  # Incorporating holiday effects
+      )
+    ) %>%
+    forecast(h = 7)  # Forecasting 1 week ahead
+
+  # Ensure forecasts are not empty before plotting
+  if (nrow(cv_forecasts) > 0) {
+
+    # Convert forecasts to tsibble format before merging
+    cv_forecasts <- cv_forecasts %>%
+      as_tsibble() %>%
+      select(-cpd_crashes) %>%
+      left_join(df, by = "date")  # Ensure date is used for merging
+
+    # Generate validation plots
+    snaive_plot <- cv_forecasts %>%
+      filter(.model == "SNaive") %>%
+      ggplot() +
+      geom_line(aes(date, cpd_crashes), color = "black") +
+      geom_line(aes(date, .mean, color = factor(.id), linetype = .model)) +
+      scale_color_discrete(name = 'Iteration') +
+      theme_bw() +
+      ggtitle('Validation - SNaive') +
+      theme(legend.position = "none")
+
+    prophet_plot <- cv_forecasts %>%
+      filter(.model == "Prophet") %>%
+      ggplot() +
+      geom_line(aes(date, cpd_crashes), color = "black") +
+      geom_line(aes(date, .mean, color = factor(.id), linetype = .model)) +
+      scale_color_discrete(name = 'Iteration') +
+      theme_bw() +
+      ggtitle('Validation - Prophet (Final Model)') +
+      theme(legend.position = "none")
+
+    sarima_plot <- cv_forecasts %>%
+      filter(.model == "SARIMA") %>%
+      ggplot() +
+      geom_line(aes(date, cpd_crashes), color = "black") +
+      geom_line(aes(date, .mean, color = factor(.id), linetype = .model)) +
+      scale_color_discrete(name = 'Iteration') +
+      theme_bw() +
+      ggtitle('Validation - SARIMA') +
+      theme(legend.position = "none")
+
+    # Arrange all plots in a grid
+    (snaive_plot + prophet_plot) / sarima_plot
+
+  } else {
+    print("Error: No forecasts generated. Check model specifications.")
+  }
+
+} else {
+  print("Error: No cross-validation splits created. Check `cv_splits`.")
+}
+
+```
+
+The cross-validation results comparing **Seasonal Naïve (SNaive), SARIMA, and Prophet (Final Model)** reveal key insights into model performance:
+
+1.  **SNaive Model:**
+
+    -   The SNaive model follows a seasonal pattern but lacks adaptability to trend variations.
+
+    -   Forecasts appear overly simplistic, making it ineffective for capturing underlying changes in traffic crash dynamics.
+
+2.  **SARIMA Model:**
+
+    -   SARIMA provides a structured fit, handling seasonality well.
+
+    -   However, its response to sudden fluctuations is somewhat rigid, potentially leading to higher forecast errors for volatile periods.
+
+3.  **Prophet (Final Model):**
+
+    -   The Prophet model demonstrates strong adaptability to trend shifts and seasonality.
+
+    -   Forecasts align well with actual values, particularly in fluctuating periods.
+
+    -   Incorporating holiday effects enhances its ability to capture demand surges, improving real-world applicability.
+
+##### Forecast Comparison: SNaive, SARIMA, and Prophet
+
+```{r}
+
+# Ensure df is a tsibble
+df_ts <- df %>%
+  mutate(date = as.Date(date)) %>%
+  as_tsibble(index = date)
+
+
+# Fit SNaive Model (Weekly Seasonality)
+snaive_mod <- df_ts %>%
+  model(SNAIVE(cpd_crashes ~ lag("week")))
+
+# Fit SARIMA Model
+sarima_mod <- df_ts %>%
+  model(ARIMA(cpd_crashes ~ pdq(1,1,1) + PDQ(1,1,1,7)))
+
+# Fit Final Prophet Model (With Holidays Included)
+prophet_mod <- df_ts %>%
+  model(fable.prophet::prophet(cpd_crashes ~ 
+    growth("linear", 
+      n_changepoints = 15,  
+      changepoint_prior_scale = 0.5) + 
+    season(period = "week", type = "multiplicative") + 
+    holiday(holidays_2024)  # Adding holiday effects
+  ))
+
+# Generate 7-Day Forecasts
+snaive_forecast <- snaive_mod %>% forecast(h = 7)
+sarima_forecast <- sarima_mod %>% forecast(h = 7)
+prophet_forecast <- prophet_mod %>% forecast(h = 7)
+
+# Combine Forecasts for Plotting
+forecast_combined <- bind_rows(
+  snaive_forecast %>% mutate(Model = "SNaive"),
+  sarima_forecast %>% mutate(Model = "SARIMA"),
+  prophet_forecast %>% mutate(Model = "Prophet")
+)
+
+# Convert to data frame for Plotly
+forecast_combined <- forecast_combined %>%
+  as_tibble()
+
+# Create Interactive Plot with Plotly
+plot <- plot_ly(forecast_combined, x = ~date, y = ~.mean, color = ~Model, type = "scatter", mode = "lines+markers") %>%
+  layout(
+    title = "7-Day Forecast: SNaive vs SARIMA vs Prophet (With Holiday Adjustments)",
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "CPD Crashes"),
+    legend = list(title = list(text = "Model")),
+    hovermode = "x unified"
+  )
+
+# Display the Plot
+plot
+
+```
+
+The **7-day forecast comparison** among **SNaive, SARIMA, and Prophet** demonstrates distinct predictive behaviors:
+
+-   **SNaive Model (Blue Line):** The SNaive model strictly follows historical seasonal patterns without adapting to trend fluctuations or external events. The significant peak on **January 3rd** followed by a sharp drop suggests **an over-reliance on past seasonality**, making it unsuitable for unexpected variations.
+
+-   **SARIMA Model (Orange Line):** SARIMA effectively captures the seasonal trends and fluctuations, maintaining a stable predictive structure. The forecast closely follows the historical data with **gradual adjustments**, making it a robust short-term forecasting tool.
+
+-   **Prophet Model (Green Line):** Prophet demonstrates **higher adaptability** to trend shifts, capturing the potential impact of **seasonality and holiday effects**. The forecast remains more dynamic, adjusting for external factors, though it introduces slight volatility in certain periods.
+
+### 4.3 Model Performance Evaluation and Final Model Selection
+
+##### Accuracy Metrics
+
+```{r}
+
+# Convert forecasts to tibble format
+cv_forecasts_tibble <- cv_forecasts %>%
+  as_tibble() %>%
+  select(.model, date, .mean)
+
+# Ensure test data is also in tibble format
+test_actuals <- test_tsibble %>%
+  as_tibble() %>%
+  select(date, cpd_crashes)
+
+# Merge actuals with forecasts
+merged_forecasts <- cv_forecasts_tibble %>%
+  left_join(test_actuals, by = "date")
+
+# Compute accuracy metrics manually
+accuracy_metrics <- merged_forecasts %>%
+  group_by(.model) %>%
+  summarise(
+    RMSE = rmse_vec(truth = cpd_crashes, estimate = .mean),
+    MAE = mae_vec(truth = cpd_crashes, estimate = .mean),
+    MAPE = mape_vec(truth = cpd_crashes, estimate = .mean)
+  ) %>%
+  arrange(RMSE)  # Sort by best model
+
+# Display results in a neat table
+knitr::kable(accuracy_metrics, caption = "Final Model Accuracy Comparison (RMSE, MAE, MAPE)")
+```
+
+1.  **ARIMA Model:**
+
+    -   The SARIMA model achieves the **lowest RMSE, MAE, and MAPE**, indicating the highest accuracy among the three models.
+
+    -   Its strong seasonality modeling capabilities contribute to more precise forecasts, making it a **better choice for minimizing forecast errors**.
+
+2.  **Prophet Model:**
+
+    -   Although Prophet performed well in capturing trend shifts and seasonal fluctuations, its **higher error values (RMSE: 8.434, MAE: 7.602)** indicate **less accurate short-term predictions**.
+
+    -   However, Prophet still retains practical benefits, particularly for **longer-term trend forecasting and interpretability**.
+
+3.  **SNaive Model:**
+
+    -   The **highest RMSE and MAPE values** confirm that the **SNaive model is the least effective**, failing to adapt to dynamic variations in crash patterns.
+
+**Final Model Selection**
+
+Based on a comprehensive evaluation of forecasting performance and accuracy metrics, the **SARIMA model is identified as the most optimal approach for short-term prediction of CPD crashes**.
+
+**Key Considerations:**
+
+1.  **Quantitative Performance:**
+
+    -   **SARIMA exhibits the lowest RMSE (4.01), MAE (3.40), and MAPE (3.95%)**, indicating superior accuracy and reliability in short-term forecasting.
+
+    -   The **Prophet model**, while effective in capturing underlying seasonality and trends, reports **higher RMSE (8.32) and MAE (7.43)**, suggesting greater forecast variance and reduced precision over shorter time horizons.
+
+    -   **SNaive, serving as a baseline model, demonstrates the weakest predictive capability**, with significantly **higher RMSE (14.87) and MAPE (11.89%)**, confirming its limited applicability beyond benchmark comparisons.
+
+2.  **Forecasting Stability:**
+
+    -   **SARIMA provides a well-balanced forecast**, effectively incorporating recent trends and seasonal patterns while minimizing error volatility.
+
+    -   **Prophet, while flexible and well-suited for long-term strategic planning, introduces higher fluctuations in short-term predictions**, making it less ideal for immediate operational decision-making.
+
+    -   **SNaive fails to adjust for underlying data patterns**, reinforcing its inadequacy for real-world applications requiring adaptable forecasting.
+
+### 4.4 Final Model Forecasting
+
+Following the selection of the **SARIMA (1,1,1)(1,1,1)\[7\] model** as the most accurate forecasting method, this subsection presents its short-term performance. The model is refitted on the entire dataset (train + test) and used to generate a **7-day forecast**. This final forecast is analyzed for its accuracy, potential implications, and any considerations for decision-making.
+
+```{r}
+# Ensure df is a tsibble with the correct index
+df_full <- df %>%
+  mutate(date = as.Date(date)) %>%  # Ensure the date column is in Date format
+  as_tsibble(index = date)  # Convert to tsibble
+
+# Refit SARIMA using the full dataset (Train + Test)
+final_sarima <- df_full %>%
+  model(SARIMA = ARIMA(cpd_crashes ~ pdq(1,1,1) + PDQ(1,1,1,7)))
+
+# Generate new data for the next 7 days
+future_dates <- new_data(df_full, 7)
+
+# Forecast for the next 7 days using the fully trained model
+sarima_forecast <- final_sarima %>%
+  forecast(new_data = future_dates)
+
+# Print forecast results in a formatted table
+kable(sarima_forecast, caption = "7-Day SARIMA Forecast (Trained on Full Dataset)", digits = 2)
+
+```
+
+The **7-day forecast from the SARIMA model**, trained on the full dataset, accurately captures **seasonal variations** in crash occurrences. The predictions exhibit a **weekly pattern**, with lower crash counts on weekends (**January 4-5**) and a gradual increase in activity towards the **start of the following week**. The **forecast maintains stable confidence intervals**, reinforcing the model’s reliability for short-term operational planning.
+
+##### Visualization of SARIMA Forecast
+
+```{r}
+
+# Convert forecast data for visualization
+df_full$Data_Type <- "Historical"
+sarima_forecast$Data_Type <- "Forecast"
+
+# Combine both datasets
+df_combined <- bind_rows(df_full, sarima_forecast)
+
+# Full Historical Data with Forecast Highlighted
+p1 <- ggplot(df_combined, aes(x = date, y = cpd_crashes, group = Data_Type)) +
+  geom_line(data = df_full, aes(y = cpd_crashes), color = "black", alpha = 0.3) +  # Faded historical data
+  geom_line(data = sarima_forecast, aes(y = .mean), color = "blue", size = 1.5) +  # Forecasted period highlighted
+  labs(
+    title = "CPD Crashes - Full Historical Data (Forecast Highlighted)",
+    x = "Date",
+    y = "CPD Crashes"
+  ) +
+  theme_minimal()
+
+# Convert to interactive using plotly
+p1_interactive <- ggplotly(p1)
+
+# Zoomed-in: 7-Day Forecast
+p2 <- ggplot() +
+  geom_line(data = df_full, aes(x = date, y = cpd_crashes), color = "black", alpha = 0.2) +  # Faded past data
+  geom_line(data = sarima_forecast, aes(x = date, y = .mean), color = "blue", size = 1.5) +  # Forecasted values
+  geom_point(data = sarima_forecast, aes(x = date, y = .mean), color = "blue", size = 3) +  # Highlight forecast points
+  labs(
+    title = "Zoomed-in: 7-Day SARIMA Forecast",
+    x = "Date",
+    y = "CPD Crashes"
+  ) +
+  scale_x_date(limits = range(sarima_forecast$date), date_breaks = "1 day", labels = scales::date_format("%b %d")) +
+  theme_minimal()
+
+# Convert zoomed-in plot to interactive plotly
+p2_interactive <- ggplotly(p2)
+
+# Display both interactive plots
+subplot(p1_interactive, p2_interactive, nrows = 2, titleX = TRUE, titleY = TRUE)
+
+```
+
+The visualization presents a **comprehensive view of the CPD crashes time series**, displaying the **full historical data** in a muted gray tone, while distinctly **highlighting the 7-day SARIMA forecast** in an enhanced blue for clarity. The forecasted values demonstrate a **gradual fluctuation within a reasonable range**, aligning with prior trends observed in the dataset.
+
+This **zoomed-in representation** of the forecasted period ensures a **focused analysis of short-term projections**, while still maintaining **context from the historical data** to assess continuity and pattern adherence. The **smooth transitions** in predicted values indicate that the model captures **seasonal and trend-based variations** effectively, making it suitable for **short-term forecasting**.
+
+# **Conclusion**
+
+This report presented a comprehensive time series analysis of CPD crashes, leveraging **SARIMA, Prophet, and SNaive models** to develop accurate forecasting solutions. Through rigorous **exploratory data analysis, model evaluation, and rolling window cross-validation**, the **SARIMA(1,1,1)(1,1,1)\[7\]** model emerged as the most effective forecasting approach, demonstrating superior performance across **RMSE, MAE, and MAPE** metrics.
+
+The **final 7-day forecast**, trained on the complete dataset, provided **meaningful short-term predictions**, maintaining coherence with observed historical patterns. While the **SARIMA model effectively captured the underlying seasonal trends**, potential **external factors such as traffic conditions, weather fluctuations, or special events** could further enhance prediction accuracy if incorporated into future iterations.
